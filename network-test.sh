@@ -50,23 +50,20 @@ fi
 # --- TEST 3: DNS Leak ---
 echo ""
 echo "[*] Test 3: DNS Leak..."
-# Resolvemos un dominio y verificamos que el DNS no filtre
+# Verificar que el DNS resolver NO sea la IP del VPS
+# (DNS sale directo por diseño, solo es leak si usa el IP del VPS como resolver)
+VPS_IFACE_IP=$(ip route get 1 2>/dev/null | awk '{print $7; exit}' 2>/dev/null)
 DNS_RESULT=$(nslookup whoami.akamai.net 2>/dev/null | grep "Address" | tail -1 | awk '{print $2}')
 if [ -n "$DNS_RESULT" ]; then
-    if [ "$DNS_RESULT" = "$PUBLIC_IP" ] || echo "$DNS_RESULT" | grep -qE "^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)"; then
-        result "PASS" "DNS Leak" "DNS resuelve a $DNS_RESULT (sin leak aparente)"
+    if [ "$DNS_RESULT" = "$PUBLIC_IP" ]; then
+        result "FAIL" "DNS Leak" "DNS coincide con IP pública del proxy — posible loop"
+    elif [ -n "$VPS_IFACE_IP" ] && [ "$DNS_RESULT" = "$VPS_IFACE_IP" ]; then
+        result "WARN" "DNS Leak" "DNS resuelve desde la IP del VPS: $DNS_RESULT"
     else
-        result "WARN" "DNS Leak" "DNS resuelve a $DNS_RESULT — verifica que no sea la IP de tu VPS"
+        result "PASS" "DNS Leak" "Resolver: $DNS_RESULT (no es la IP del VPS)"
     fi
 else
-    # Si nslookup falla, el DNS puede estar bloqueado o proxificado correctamente
-    # Intentar con wget como fallback
-    DNS_TEST=$(wget -qO- --timeout=10 https://1.1.1.1/cdn-cgi/trace 2>/dev/null | grep "ip=")
-    if [ -n "$DNS_TEST" ]; then
-        result "PASS" "DNS Leak" "DNS funciona vía proxy. $DNS_TEST"
-    else
-        result "FAIL" "DNS Leak" "No se pudo resolver DNS"
-    fi
+    result "WARN" "DNS Leak" "No se pudo verificar el DNS resolver"
 fi
 
 # --- TEST 4: Conectividad TCP ---
@@ -135,11 +132,13 @@ else
     result "FAIL" "TProxy Engine" "No responde en puerto 1080"
 fi
 
-# DNS proxy
-if nc -z 127.0.0.1 53 2>/dev/null; then
-    result "PASS" "DNS Proxy" "Escuchando en puerto 53"
+# DNS directo (UDP 53 sale sin proxy - diseño intencional para evitar bucle)
+# Solo verificamos que DNS funcione, no que esté proxificado
+DNS_CHECK=$(nslookup google.com 2>/dev/null | grep -c "Address")
+if [ "$DNS_CHECK" -gt 0 ]; then
+    result "PASS" "DNS Funcional" "DNS resuelve correctamente (sale directo por diseño)"
 else
-    result "FAIL" "DNS Proxy" "No responde en puerto 53"
+    result "FAIL" "DNS Funcional" "DNS no funciona"
 fi
 
 # --- RESUMEN ---
