@@ -117,11 +117,6 @@ socks5:
 tcp:
   address: 0.0.0.0
   port: 1080
-dns:
-  address: 0.0.0.0
-  port: 53
-  upstream: 8.8.4.4
-  rewrite: true
 EOF
 chmod 600 "$SETUP_DIR/config.yaml"
 
@@ -132,8 +127,8 @@ cat <<'IPTEOF_HEADER' > "$SETUP_DIR/iptables-setup.sh"
 # ==============================================================================
 # NEOXAGENT - IPTABLES BLINDADO
 # - Redirige TODO TCP vía TPROXY (proxy SOCKS5 transparente)
-# - Redirige DNS (UDP 53) al tproxy DNS listener
-# - Kill-switch: si tproxy se cae, NADA sale
+# - DNS (UDP 53) sale DIRECTO (no proxificado, evita bucle con tproxy)
+# - Kill-switch: UDP no-DNS bloqueado
 # - IPv6 bloqueado totalmente
 # ==============================================================================
 set -e
@@ -175,17 +170,11 @@ iptables -t mangle -A OUTPUT -d 192.168.0.0/16 -j RETURN
 # Marcar TODO TCP para TPROXY
 iptables -t mangle -A OUTPUT -p tcp -j MARK --set-mark 1
 
-# Marcar DNS (UDP 53) para TPROXY
-iptables -t mangle -A OUTPUT -p udp --dport 53 -j MARK --set-mark 1
-
 # ==============================================================================
 # IPv4 - PREROUTING (Aplicar TPROXY a tráfico marcado)
 # ==============================================================================
 # TCP → puerto 1080 (proxy SOCKS5 transparente)
 iptables -t mangle -A PREROUTING -p tcp -m mark --mark 1 -j TPROXY --on-port 1080 --tproxy-mark 1
-
-# DNS (UDP 53) → puerto 53 del tproxy (DNS proxy)
-iptables -t mangle -A PREROUTING -p udp --dport 53 -m mark --mark 1 -j TPROXY --on-port 53 --tproxy-mark 1
 
 # ==============================================================================
 # IPv4 - KILL-SWITCH
@@ -202,8 +191,14 @@ iptables -A OUTPUT -d 192.168.0.0/16 -j ACCEPT
 # Permitir tráfico marcado (ya va por TPROXY)
 iptables -A OUTPUT -m mark --mark 1 -j ACCEPT
 
-# BLOQUEAR todo lo demás (kill-switch)
-iptables -A OUTPUT -j DROP
+# DNS sale directo (UDP 53) - evita bucle con tproxy
+iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
+
+# BLOQUEAR todo UDP no-DNS (kill-switch)
+iptables -A OUTPUT -p udp -j DROP
+
+# BLOQUEAR todo lo demás TCP no marcado
+iptables -A OUTPUT -p tcp -j DROP
 
 # ==============================================================================
 # IPv6 - BLOQUEO TOTAL
