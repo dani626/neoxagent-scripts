@@ -1,0 +1,6 @@
+# Archivos con credenciales sensibles
+neoxagent.conf
+*.conf
+
+# Directorio de setup local
+traff-setup/

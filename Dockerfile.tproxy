@@ -1,0 +1,21 @@
+# ==============================================================================
+# NEOXAGENT - IMAGEN UNIFICADA (TProxy + Iptables + Firewall)
+# Compila hev-socks5-tproxy desde fuente e incluye iptables pre-instalado
+# ==============================================================================
+# Build:  podman build -t localhost/hev-socks5-tproxy:latest -f Dockerfile.tproxy .
+
+# --- Etapa 1: Compilar hev-socks5-tproxy ---
+FROM alpine:latest AS builder
+RUN apk add --no-cache git make gcc musl-dev linux-headers
+RUN git clone --depth 1 https://github.com/heiher/hev-socks5-tproxy.git /build
+WORKDIR /build
+RUN make
+
+# --- Etapa 2: Imagen final (proxy + firewall) ---
+FROM alpine:latest
+RUN apk add --no-cache iproute2 iptables ip6tables netcat-openbsd \
+    && rm -rf /var/cache/apk/*
+COPY --from=builder /build/bin/hev-socks5-tproxy /usr/local/bin/
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]
