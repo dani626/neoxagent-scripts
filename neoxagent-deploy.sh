@@ -229,9 +229,9 @@ podman pod create --name "$POD_NAME" \
 # --- 6. MOTOR UNIFICADO (TProxy + Firewall) ---
 echo "[*] Levantando TProxy Engine + Firewall..."
 podman run -d --pod "$POD_NAME" --name "${POD_NAME}-tproxy" \
-  --restart unless-stopped --cpus="0.3" --memory="128m" \
+  --restart unless-stopped --cpus="0.5" --memory="256m" \
   --log-opt max-size=10m --log-opt max-file=1 \
-  --cap-add=NET_ADMIN \
+  --cap-add=NET_ADMIN --cap-add=NET_BIND_SERVICE \
   -v "$SETUP_DIR/config.yaml:/config.yaml:Z" \
   -v "$SETUP_DIR/iptables-setup.sh:/iptables-setup.sh:Z" \
   "$TPROXY_IMAGE"
