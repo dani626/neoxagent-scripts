@@ -197,8 +197,11 @@ iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
 # BLOQUEAR todo UDP no-DNS (kill-switch)
 iptables -A OUTPUT -p udp -j DROP
 
-# BLOQUEAR todo lo demás TCP no marcado
-iptables -A OUTPUT -p tcp -j DROP
+# BLOQUEAR ICMP (ping/traceroute filtraría IP del VPS)
+iptables -A OUTPUT -p icmp -j DROP
+
+# BLOQUEAR todo lo demás (catch-all: TCP no marcado, ICMP, otros protocolos)
+iptables -A OUTPUT -j DROP
 
 # ==============================================================================
 # IPv6 - BLOQUEO TOTAL
