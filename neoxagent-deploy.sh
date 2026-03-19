@@ -8,6 +8,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TPROXY_IMAGE="localhost/hev-socks5-tproxy:latest"
+DNS_IMAGE="localhost/neoxagent-dns:latest"
 INSTALL_MODE=false
 
 # Detectar flag --install
@@ -26,6 +27,7 @@ deploy_miner() {
     podman run -d --pod "$POD_NAME" --name "${POD_NAME}-${name}" \
       --restart unless-stopped --cpus="0.2" --memory="150m" \
       --log-opt max-size=10m --log-opt max-file=1 \
+      -e TZ="${TZ:-UTC}" \
       "$image" "$@"
 }
 
@@ -89,6 +91,17 @@ if ! podman image exists "$TPROXY_IMAGE" 2>/dev/null; then
     else
         echo "[!] Error: No se encuentra Dockerfile.tproxy. Ejecuta primero:"
         echo "    podman build -t $TPROXY_IMAGE -f Dockerfile.tproxy ."
+        exit 1
+    fi
+fi
+
+# Verificar que la imagen DNS (dnscrypt-proxy) existe
+if ! podman image exists "$DNS_IMAGE" 2>/dev/null; then
+    echo "[!] Imagen $DNS_IMAGE no encontrada. Construyendo..."
+    if [ -f "$SCRIPT_DIR/Dockerfile.dns" ]; then
+        podman build -t "$DNS_IMAGE" -f "$SCRIPT_DIR/Dockerfile.dns" "$SCRIPT_DIR"
+    else
+        echo "[!] Error: No se encuentra Dockerfile.dns."
         exit 1
     fi
 fi
@@ -191,8 +204,8 @@ iptables -A OUTPUT -d 192.168.0.0/16 -j ACCEPT
 # Permitir tráfico marcado (ya va por TPROXY)
 iptables -A OUTPUT -m mark --mark 1 -j ACCEPT
 
-# DNS sale directo (UDP 53) - evita bucle con tproxy
-iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
+# DNS ahora va por DoH (TCP 443 → TPROXY → proxy)
+# Ya NO necesitamos dejar salir UDP 53 directo
 
 # BLOQUEAR todo UDP no-DNS (kill-switch)
 iptables -A OUTPUT -p udp -j DROP
@@ -219,7 +232,10 @@ chmod 700 "$SETUP_DIR/iptables-setup.sh"
 
 # --- 5. CREACIÓN DEL POD BLINDADO ---
 echo "[*] Creando Pod..."
+HOSTNAME_ALIAS="${HOSTNAME_ALIAS:-Desktop-Home}"
 podman pod create --name "$POD_NAME" \
+  --hostname "$HOSTNAME_ALIAS" \
+  --dns 127.0.0.1 \
   --sysctl net.ipv4.conf.all.rp_filter=0 \
   --sysctl net.ipv4.conf.lo.rp_filter=0 \
   --sysctl net.ipv6.conf.all.disable_ipv6=1
@@ -248,6 +264,23 @@ for i in $(seq 1 20); do
     sleep 2
 done
 
+# --- 7. DNS-over-HTTPS SIDECAR (Anti DNS Leak) ---
+echo "[*] Levantando DNS-over-HTTPS (dnscrypt-proxy)..."
+podman run -d --pod "$POD_NAME" --name "${POD_NAME}-dns" \
+  --restart unless-stopped --cpus="0.1" --memory="64m" \
+  --log-opt max-size=5m --log-opt max-file=1 \
+  "$DNS_IMAGE"
+
+# Esperar a que DNS esté listo
+for i in $(seq 1 10); do
+    if podman exec "${POD_NAME}-dns" nc -z -u 127.0.0.1 53 2>/dev/null; then
+        echo "[✓] DNS-over-HTTPS activo."
+        break
+    fi
+    [ "$i" -eq 10 ] && echo "[!] WARN: DNS sidecar puede no estar listo."
+    sleep 1
+done
+
 # ==============================================================================
 # MODO TEST vs DESPLIEGUE DE MINEROS
 # ==============================================================================
@@ -274,6 +307,9 @@ if [ "${TEST_MODE:-false}" = "true" ]; then
 
 else
     # --- MODO PRODUCCIÓN: Desplegar mineros ---
+
+    # Timezone del proxy (configurable en .conf)
+    PROXY_TZ="${TZ:-UTC}"
 
     # 1. TRAFFMONETIZER
     if [ -n "${TRAFF_TOKEN:-}" ]; then

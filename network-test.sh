@@ -132,13 +132,32 @@ else
     result "FAIL" "TProxy Engine" "No responde en puerto 1080"
 fi
 
-# DNS directo (UDP 53 sale sin proxy - diseño intencional para evitar bucle)
-# Solo verificamos que DNS funcione, no que esté proxificado
+# DNS via DoH (debe resolver a través del proxy ahora)
 DNS_CHECK=$(nslookup google.com 2>/dev/null | grep -c "Address")
 if [ "$DNS_CHECK" -gt 0 ]; then
-    result "PASS" "DNS Funcional" "DNS resuelve correctamente (sale directo por diseño)"
+    result "PASS" "DNS Funcional" "DNS resuelve correctamente vía DoH"
 else
     result "FAIL" "DNS Funcional" "DNS no funciona"
+fi
+
+# --- TEST 10: Hostname realista ---
+echo ""
+echo "[*] Test 10: Hostname..."
+CURRENT_HOSTNAME=$(hostname 2>/dev/null)
+if echo "$CURRENT_HOSTNAME" | grep -qiE "(vps|server|cloud|auto-install|debian|ubuntu|localhost)"; then
+    result "WARN" "Hostname" "Hostname '$CURRENT_HOSTNAME' delata servidor — configura HOSTNAME_ALIAS"
+else
+    result "PASS" "Hostname" "Hostname: $CURRENT_HOSTNAME (no delata servidor)"
+fi
+
+# --- TEST 11: Timezone ---
+echo ""
+echo "[*] Test 11: Timezone..."
+CURRENT_TZ=$(date +%Z 2>/dev/null)
+if [ "$CURRENT_TZ" = "UTC" ]; then
+    result "WARN" "Timezone" "Timezone es UTC — configura TZ en neoxagent.conf"
+else
+    result "PASS" "Timezone" "Timezone: $CURRENT_TZ (no es UTC genérico)"
 fi
 
 # --- RESUMEN ---

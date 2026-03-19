@@ -1,0 +1,23 @@
+FROM alpine:latest
+
+# dnscrypt-proxy: recibe DNS en UDP 53 local, lo reenvía como DoH (TCP 443)
+# El tráfico TCP 443 será capturado por TPROXY → sale por el proxy SOCKS5
+# Resultado: el DNS resolver ve la IP del proxy, NO la del VPS
+RUN apk add --no-cache dnscrypt-proxy \
+    && rm -rf /var/cache/apk/*
+
+# Configuración mínima: escuchar en 127.0.0.1:53, usar DoH de Cloudflare/Google
+RUN mkdir -p /etc/dnscrypt-proxy && \
+    echo 'server_names = ["cloudflare", "google"]' > /etc/dnscrypt-proxy/dnscrypt-proxy.toml && \
+    echo 'listen_addresses = ["0.0.0.0:53"]' >> /etc/dnscrypt-proxy/dnscrypt-proxy.toml && \
+    echo 'max_clients = 50' >> /etc/dnscrypt-proxy/dnscrypt-proxy.toml && \
+    echo 'ipv6_servers = false' >> /etc/dnscrypt-proxy/dnscrypt-proxy.toml && \
+    echo 'block_ipv6 = true' >> /etc/dnscrypt-proxy/dnscrypt-proxy.toml && \
+    echo 'cache = true' >> /etc/dnscrypt-proxy/dnscrypt-proxy.toml && \
+    echo 'cache_size = 512' >> /etc/dnscrypt-proxy/dnscrypt-proxy.toml && \
+    echo '[sources.public-resolvers]' >> /etc/dnscrypt-proxy/dnscrypt-proxy.toml && \
+    echo 'urls = ["https://raw.githubusercontent.com/DNSCrypt/dnscrypt-resolvers/master/v3/public-resolvers.md", "https://download.dnscrypt.info/resolvers-list/v3/public-resolvers.md"]' >> /etc/dnscrypt-proxy/dnscrypt-proxy.toml && \
+    echo 'cache_file = "/tmp/public-resolvers.md"' >> /etc/dnscrypt-proxy/dnscrypt-proxy.toml && \
+    echo 'minisign_key = "RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3"' >> /etc/dnscrypt-proxy/dnscrypt-proxy.toml
+
+CMD ["dnscrypt-proxy", "-config", "/etc/dnscrypt-proxy/dnscrypt-proxy.toml"]
