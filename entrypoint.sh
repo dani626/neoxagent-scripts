@@ -29,4 +29,4 @@ fi
 
 # --- Paso 2: Lanzar TProxy ---
 echo "[entrypoint] Iniciando hev-socks5-tproxy..."
-exec hev-socks5-tproxy -c "$CONFIG_FILE"
+exec hev-socks5-tproxy "$CONFIG_FILE"
