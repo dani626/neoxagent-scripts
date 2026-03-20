@@ -291,18 +291,33 @@ if [ "${TEST_MODE:-false}" = "true" ]; then
     echo "[🔍] MODO TEST ACTIVADO — No se instalarán mineros."
     echo "[*] Ejecutando tests de red dentro del pod..."
 
+    # Limpiar contenedor previo si quedó colgado
+    podman rm -f "${POD_NAME}-nettest" 2>/dev/null || true
+
+    # Desactivar set -e para capturar el exit code del test sin matar el script
+    set +e
     podman run --rm --pod "$POD_NAME" --name "${POD_NAME}-nettest" \
       --cap-add=NET_ADMIN \
       -v "$SCRIPT_DIR/network-test.sh:/network-test.sh:Z" \
-      alpine sh -c "apk add --no-cache wget bind-tools netcat-openbsd iptables > /dev/null 2>&1 && sh /network-test.sh"
-
+      alpine sh -c "apk add --no-cache wget bind-tools netcat-openbsd iptables 2>&1 && sh /network-test.sh"
     TEST_EXIT=$?
+    set -e
+
     echo ""
     if [ $TEST_EXIT -eq 0 ]; then
         echo "[✓] Tests completados. La red está blindada."
         echo "    Para desplegar mineros, cambia TEST_MODE=\"false\" en el config y re-ejecuta."
+    elif [ $TEST_EXIT -eq 125 ] || [ $TEST_EXIT -eq 126 ] || [ $TEST_EXIT -eq 127 ]; then
+        echo "[!] ERROR CRÍTICO: podman run falló antes de ejecutar el test (exit $TEST_EXIT)."
+        echo "    Posibles causas:"
+        echo "      - El firewall del pod bloquea tráfico del contenedor nettest"
+        echo "      - El volumen -v no pudo montarse (permisos SELinux/Z)"
+        echo "      - La imagen alpine no está disponible localmente"
+        echo "    Diagnóstico manual:"
+        echo "      podman logs ${POD_NAME}-tproxy"
+        echo "      podman run --rm --pod $POD_NAME alpine wget -qO- https://api.ipify.org"
     else
-        echo "[!] Hay tests fallidos. Revisa antes de desplegar mineros."
+        echo "[!] Hay tests fallidos (exit $TEST_EXIT). Revisa antes de desplegar mineros."
     fi
 
 else
