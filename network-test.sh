@@ -23,35 +23,54 @@ echo " $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 echo "============================================"
 echo ""
 
-# --- TEST 1: IP Pública (¿se ve la IP del proxy o la del VPS?) ---
+# --- TEST 1: IP Pública (múltiples endpoints de fallback) ---
 echo "[*] Test 1: Verificando IP pública..."
-PUBLIC_IP=$(wget -qO- --timeout=10 https://api.ipify.org 2>/dev/null)
+PUBLIC_IP=""
+for endpoint in \
+    "https://api.ipify.org" \
+    "https://icanhazip.com" \
+    "https://ifconfig.me/ip" \
+    "https://api4.my-ip.io/ip"; do
+    PUBLIC_IP=$(wget -qO- --timeout=10 "$endpoint" 2>/dev/null | tr -d '[:space:]')
+    [ -n "$PUBLIC_IP" ] && break
+done
+
 if [ -n "$PUBLIC_IP" ]; then
     result "PASS" "IP Pública" "$PUBLIC_IP"
     echo "    → Verifica que esta IP NO sea la de tu VPS."
     echo "    → Debería ser la IP del proxy SOCKS5."
 else
-    result "FAIL" "IP Pública" "No se pudo obtener (¿proxy caído o sin conectividad?)"
+    # Intentar obtener la IP desde httpbin como último recurso
+    HTTPBIN_IP=$(wget -qO- --timeout=10 https://httpbin.org/ip 2>/dev/null | grep '"origin"' | cut -d'"' -f4 | tr -d '[:space:]')
+    if [ -n "$HTTPBIN_IP" ]; then
+        PUBLIC_IP="$HTTPBIN_IP"
+        result "PASS" "IP Pública" "$PUBLIC_IP (vía httpbin)"
+        echo "    → Verifica que esta IP NO sea la de tu VPS."
+    else
+        result "FAIL" "IP Pública" "No se pudo obtener (¿proxy caído o sin conectividad?)"
+    fi
 fi
 
 # --- TEST 2: Geolocalización de la IP ---
 echo ""
 echo "[*] Test 2: Geolocalización..."
-GEO_INFO=$(wget -qO- --timeout=10 "https://ipinfo.io/${PUBLIC_IP}/json" 2>/dev/null)
-if [ -n "$GEO_INFO" ]; then
-    GEO_CITY=$(echo "$GEO_INFO" | grep '"city"' | cut -d'"' -f4)
-    GEO_COUNTRY=$(echo "$GEO_INFO" | grep '"country"' | cut -d'"' -f4)
-    GEO_ORG=$(echo "$GEO_INFO" | grep '"org"' | cut -d'"' -f4)
-    result "PASS" "Geolocalización" "$GEO_CITY, $GEO_COUNTRY ($GEO_ORG)"
+if [ -n "$PUBLIC_IP" ]; then
+    GEO_INFO=$(wget -qO- --timeout=10 "https://ipinfo.io/${PUBLIC_IP}/json" 2>/dev/null)
+    if [ -n "$GEO_INFO" ]; then
+        GEO_CITY=$(echo "$GEO_INFO" | grep '"city"' | cut -d'"' -f4)
+        GEO_COUNTRY=$(echo "$GEO_INFO" | grep '"country"' | cut -d'"' -f4)
+        GEO_ORG=$(echo "$GEO_INFO" | grep '"org"' | cut -d'"' -f4)
+        result "PASS" "Geolocalización" "$GEO_CITY, $GEO_COUNTRY ($GEO_ORG)"
+    else
+        result "WARN" "Geolocalización" "No se pudo obtener info"
+    fi
 else
-    result "WARN" "Geolocalización" "No se pudo obtener info"
+    result "WARN" "Geolocalización" "Saltado (IP pública no disponible)"
 fi
 
 # --- TEST 3: DNS Leak ---
 echo ""
 echo "[*] Test 3: DNS Leak..."
-# Verificar que el DNS resolver NO sea la IP del VPS
-# (DNS sale directo por diseño, solo es leak si usa el IP del VPS como resolver)
 VPS_IFACE_IP=$(ip route get 1 2>/dev/null | awk '{print $7; exit}' 2>/dev/null)
 DNS_RESULT=$(nslookup whoami.akamai.net 2>/dev/null | grep "Address" | tail -1 | awk '{print $2}')
 if [ -n "$DNS_RESULT" ]; then
@@ -66,16 +85,25 @@ else
     result "WARN" "DNS Leak" "No se pudo verificar el DNS resolver"
 fi
 
-# --- TEST 4: Conectividad TCP ---
+# --- TEST 4: Conectividad TCP (independiente de PUBLIC_IP) ---
 echo ""
 echo "[*] Test 4: Conectividad TCP..."
 TCP_TEST=$(wget -qO- --timeout=10 https://httpbin.org/ip 2>/dev/null)
 if [ -n "$TCP_TEST" ]; then
-    TCP_IP=$(echo "$TCP_TEST" | grep "origin" | cut -d'"' -f4)
-    if [ "$TCP_IP" = "$PUBLIC_IP" ]; then
+    TCP_IP=$(echo "$TCP_TEST" | grep '"origin"' | cut -d'"' -f4 | tr -d '[:space:]')
+    if [ -n "$PUBLIC_IP" ] && [ "$TCP_IP" = "$PUBLIC_IP" ]; then
         result "PASS" "TCP vía proxy" "httpbin ve: $TCP_IP (coincide con IP pública)"
-    else
+    elif [ -n "$PUBLIC_IP" ]; then
         result "WARN" "TCP vía proxy" "httpbin ve: $TCP_IP (difiere de $PUBLIC_IP)"
+    else
+        # PUBLIC_IP vacío: usar la IP de httpbin como referencia
+        # Si no es la IP del VPS, el proxy está funcionando
+        VPS_IP=$(ip route get 8.8.8.8 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}')
+        if [ -n "$VPS_IP" ] && [ "$TCP_IP" = "$VPS_IP" ]; then
+            result "FAIL" "TCP vía proxy" "httpbin ve la IP del VPS: $TCP_IP — proxy NO activo"
+        else
+            result "PASS" "TCP vía proxy" "httpbin ve: $TCP_IP (tráfico pasa por proxy)"
+        fi
     fi
 else
     result "FAIL" "TCP vía proxy" "No se pudo conectar a httpbin.org"
@@ -104,7 +132,6 @@ fi
 # --- TEST 7: UDP Bloqueado (excepto DNS) ---
 echo ""
 echo "[*] Test 7: UDP Kill-Switch..."
-# Intentar enviar UDP a un servidor NTP (puerto 123)
 UDP_TEST=$(nc -zu -w3 pool.ntp.org 123 2>&1)
 UDP_EXIT=$?
 if [ $UDP_EXIT -ne 0 ]; then
@@ -132,7 +159,6 @@ else
     result "FAIL" "TProxy Engine" "No responde en puerto 1080"
 fi
 
-# DNS via DoH (debe resolver a través del proxy ahora)
 DNS_CHECK=$(nslookup google.com 2>/dev/null | grep -c "Address")
 if [ "$DNS_CHECK" -gt 0 ]; then
     result "PASS" "DNS Funcional" "DNS resuelve correctamente vía DoH"
