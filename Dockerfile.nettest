@@ -1,0 +1,9 @@
+# ==============================================================================
+# NEOXAGENT - IMAGEN DE TEST DE RED
+# Herramientas pre-instaladas para no depender de DNS/red en tiempo de ejecución
+# ==============================================================================
+# Build: podman build -t localhost/neoxagent-nettest:latest -f Dockerfile.nettest .
+FROM alpine:latest
+RUN apk add --no-cache wget bind-tools netcat-openbsd iptables iproute2 \
+    && rm -rf /var/cache/apk/*
+CMD ["sh"]

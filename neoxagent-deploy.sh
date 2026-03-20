@@ -9,6 +9,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TPROXY_IMAGE="localhost/hev-socks5-tproxy:latest"
 DNS_IMAGE="localhost/neoxagent-dns:latest"
+NETTEST_IMAGE="localhost/neoxagent-nettest:latest"
 INSTALL_MODE=false
 
 # Detectar flag --install
@@ -102,6 +103,18 @@ if ! podman image exists "$DNS_IMAGE" 2>/dev/null; then
         podman build -t "$DNS_IMAGE" -f "$SCRIPT_DIR/Dockerfile.dns" "$SCRIPT_DIR"
     else
         echo "[!] Error: No se encuentra Dockerfile.dns."
+        exit 1
+    fi
+fi
+
+# Verificar que la imagen nettest existe (auto-build si no)
+if ! podman image exists "$NETTEST_IMAGE" 2>/dev/null; then
+    echo "[!] Imagen $NETTEST_IMAGE no encontrada. Construyendo..."
+    if [ -f "$SCRIPT_DIR/Dockerfile.nettest" ]; then
+        podman build -t "$NETTEST_IMAGE" -f "$SCRIPT_DIR/Dockerfile.nettest" "$SCRIPT_DIR"
+        echo "[✓] Imagen nettest construida."
+    else
+        echo "[!] Error: No se encuentra Dockerfile.nettest."
         exit 1
     fi
 fi
@@ -299,7 +312,7 @@ if [ "${TEST_MODE:-false}" = "true" ]; then
     podman run --rm --pod "$POD_NAME" --name "${POD_NAME}-nettest" \
       --cap-add=NET_ADMIN \
       -v "$SCRIPT_DIR/network-test.sh:/network-test.sh:Z" \
-      alpine sh -c "apk add --no-cache wget bind-tools netcat-openbsd iptables 2>&1 && sh /network-test.sh"
+      "$NETTEST_IMAGE" sh /network-test.sh
     TEST_EXIT=$?
     set -e
 
@@ -310,12 +323,11 @@ if [ "${TEST_MODE:-false}" = "true" ]; then
     elif [ $TEST_EXIT -eq 125 ] || [ $TEST_EXIT -eq 126 ] || [ $TEST_EXIT -eq 127 ]; then
         echo "[!] ERROR CRÍTICO: podman run falló antes de ejecutar el test (exit $TEST_EXIT)."
         echo "    Posibles causas:"
-        echo "      - El firewall del pod bloquea tráfico del contenedor nettest"
         echo "      - El volumen -v no pudo montarse (permisos SELinux/Z)"
-        echo "      - La imagen alpine no está disponible localmente"
+        echo "      - La imagen $NETTEST_IMAGE no está disponible"
         echo "    Diagnóstico manual:"
         echo "      podman logs ${POD_NAME}-tproxy"
-        echo "      podman run --rm --pod $POD_NAME alpine wget -qO- https://api.ipify.org"
+        echo "      podman run --rm --pod $POD_NAME $NETTEST_IMAGE wget -qO- https://api.ipify.org"
     else
         echo "[!] Hay tests fallidos (exit $TEST_EXIT). Revisa antes de desplegar mineros."
     fi
